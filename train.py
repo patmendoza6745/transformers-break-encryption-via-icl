@@ -160,26 +160,10 @@ def get_batch(split):
         start = np.random.randint(0, len(mmap) - k_pairs - 1)
         plain = mmap[start:start + k_pairs].copy()          # np.uint8, shape (k_pairs,)
 
-        # ----- 2. decide whether query char is "seen" or "unseen" -------
-        seen_query = np.random.rand() < 0.5                 # ~50 % probability
-
-        if seen_query:
-            # copy a random earlier plaintext into the last slot
-            pick = np.random.randint(0, known_k)            # earlier index
-            plain[-1] = plain[pick]                         # now duplicated
-        else:
-            # ensure the last plaintext is *not* present earlier
-            used = set(plain[:-1])
-            all_ids = set(alpha_ids)
-            options = np.array(list(all_ids - used))
-            if len(options) == 0:                           # rare, but sample might contain all 26 letters
-                options = alpha_ids
-            plain[-1] = np.random.choice(options)
-
-        # ----- 3. fresh random key for this sample -----------------------
+        # ----- 2. fresh random key for this sample -----------------------
         enc, _ = random_key()
 
-        # ----- 4. build prompt ------------------------------------------
+        # ----- 3. build prompt ------------------------------------------
         buf, tgt = [], []
         for i, p in enumerate(plain):
             c = enc[p]
