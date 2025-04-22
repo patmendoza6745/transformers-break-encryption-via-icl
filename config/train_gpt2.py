@@ -3,18 +3,19 @@
 # $ torchrun --standalone --nproc_per_node=8 train.py config/train_gpt2.py
 
 wandb_log = True
-wandb_project = 'owt'
+wandb_project = 'CS182-final-project'
 wandb_run_name='gpt2-124M'
 
 # these make the total batch size be ~0.5M
-# 12 batch size * 1024 block size * 5 gradaccum * 8 GPUs = 491,520
-batch_size = 12
-block_size = 1024
-gradient_accumulation_steps = 5 * 8
+# each encryption key has 1024 plaintext/ciphertext pairs
+# 256 batch size * 2048 block size * 1 gradient_accumulation_steps = 524,288
+batch_size = 256
+block_size = 2048
+gradient_accumulation_steps = 1
 
-# this makes total number of tokens be 300B
-max_iters = 600000
-lr_decay_iters = 600000
+# this makes total number of tokens be ~21M, with ~10M input/output pairs
+max_iters = 40
+lr_decay_iters = 40
 
 # eval stuff
 eval_interval = 1000

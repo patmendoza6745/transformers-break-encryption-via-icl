@@ -50,11 +50,11 @@ wandb_run_name = 'gpt2' # 'run' + str(time.time())
 dataset = 'openwebtext'
 gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
 batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
-block_size = 1024
+block_size = 2048
 # model
-n_layer = 12
-n_head = 12
-n_embd = 768
+n_layer = 8
+n_head = 8
+n_embd = 256
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
 bias = False # do we use bias inside LayerNorm and Linear layers?
 # adamw optimizer
@@ -80,6 +80,9 @@ config_keys = [k for k,v in globals().items() if not k.startswith('_') and isins
 exec(open('configurator.py').read()) # overrides from command line or config file
 config = {k: globals()[k] for k in config_keys} # will be useful for logging
 # -----------------------------------------------------------------------------
+
+ALPHABET = [chr(i) for i in range(ord('a'), ord('z') + 1)]
+SEP_BAR, SEP_Q = '|', '?'
 
 # various inits, derived attributes, I/O setup
 ddp = int(os.environ.get('RANK', -1)) != -1 # is this a ddp run?
@@ -126,36 +129,80 @@ ctx = nullcontext() if device_type == 'cpu' else torch.amp.autocast(device_type=
 
 # poor man's data loader
 data_dir = os.path.join('data', dataset)
+with open(os.path.join(data_dir, 'meta.pkl'), 'rb') as f:
+    meta = pickle.load(f)
+stoi, itos = meta['stoi'], meta['itos']
+vocab_size = meta['vocab_size'] 
+print(f"Using vocab size of {vocab_size} (a-z + separators)")
+
+# ---------------- helper: random mono‑alphabetic key --------
+alpha_ids = np.array([stoi[c] for c in ALPHABET], dtype=np.uint8)
+def random_key():
+    perm = np.random.permutation(26)
+    enc  = {alpha_ids[i]: alpha_ids[perm[i]] for i in range(26)}   # plain→cipher
+    dec  = {v: k for k, v in enc.items()}                          # cipher→plain
+    return enc, dec
+
 def get_batch(split):
-    # We recreate np.memmap every batch to avoid a memory leak, as per
-    # https://stackoverflow.com/questions/45132940/numpy-memmap-memory-usage-want-to-iterate-once/61472122#61472122
-    if split == 'train':
-        data = np.memmap(os.path.join(data_dir, 'train.bin'), dtype=np.uint16, mode='r')
-    else:
-        data = np.memmap(os.path.join(data_dir, 'val.bin'), dtype=np.uint16, mode='r')
-    ix = torch.randint(len(data) - block_size, (batch_size,))
-    x = torch.stack([torch.from_numpy((data[i:i+block_size]).astype(np.int64)) for i in ix])
-    y = torch.stack([torch.from_numpy((data[i+1:i+1+block_size]).astype(np.int64)) for i in ix])
+    mmap = np.memmap(os.path.join(data_dir, f'{split}.bin'),
+                     dtype=np.uint8, mode='r')
+
+    k_pairs   = 1024                              # desired number of pairs
+    known_k   = k_pairs - 1                       # last one is the query
+    prompt_sz = 2 * k_pairs                       # 2048 tokens
+    assert prompt_sz == block_size, "block_size must be 2*k_pairs"
+
+    X = torch.full((batch_size, block_size), stoi['|'],  dtype=torch.long)
+    Y = torch.full((batch_size, block_size), -1,          dtype=torch.long)
+
+    for b in range(batch_size):
+        # ----- 1. grab k plaintext letters from corpus -------------------
+        start = np.random.randint(0, len(mmap) - k_pairs - 1)
+        plain = mmap[start:start + k_pairs].copy()          # np.uint8, shape (k_pairs,)
+
+        # ----- 2. decide whether query char is "seen" or "unseen" -------
+        seen_query = np.random.rand() < 0.5                 # ~50 % probability
+
+        if seen_query:
+            # copy a random earlier plaintext into the last slot
+            pick = np.random.randint(0, known_k)            # earlier index
+            plain[-1] = plain[pick]                         # now duplicated
+        else:
+            # ensure the last plaintext is *not* present earlier
+            used = set(plain[:-1])
+            all_ids = set(alpha_ids)
+            options = np.array(list(all_ids - used))
+            if len(options) == 0:                           # rare, but sample might contain all 26 letters
+                options = alpha_ids
+            plain[-1] = np.random.choice(options)
+
+        # ----- 3. fresh random key for this sample -----------------------
+        enc, _ = random_key()
+
+        # ----- 4. build prompt ------------------------------------------
+        buf, tgt = [], []
+        for i, p in enumerate(plain):
+            c = enc[p]
+            if i < known_k:                                 # give answer
+                buf.extend([c, p]);      tgt.extend([-1, p])
+            else:                                           # query pair
+                buf.extend([c, stoi['?']])
+                tgt.extend([-1, p])
+
+        X[b] = torch.from_numpy(np.asarray(buf,  np.uint8))
+        Y[b] = torch.from_numpy(np.asarray(tgt, np.int64))
+
     if device_type == 'cuda':
-        # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
-        x, y = x.pin_memory().to(device, non_blocking=True), y.pin_memory().to(device, non_blocking=True)
+        X, Y = X.pin_memory().to(device, non_blocking=True), \
+               Y.pin_memory().to(device, non_blocking=True)
     else:
-        x, y = x.to(device), y.to(device)
-    return x, y
+        X, Y = X.to(device), Y.to(device)
+    return X, Y
 
 # init these up here, can override if init_from='resume' (i.e. from a checkpoint)
 iter_num = 0
 total_tokens = 0
 best_val_loss = 1e9
-
-# attempt to derive vocab_size from the dataset
-meta_path = os.path.join(data_dir, 'meta.pkl')
-meta_vocab_size = None
-if os.path.exists(meta_path):
-    with open(meta_path, 'rb') as f:
-        meta = pickle.load(f)
-    meta_vocab_size = meta['vocab_size']
-    print(f"found vocab_size = {meta_vocab_size} (inside {meta_path})")
 
 # model init
 model_args = dict(n_layer=n_layer, n_head=n_head, n_embd=n_embd, block_size=block_size,
@@ -164,9 +211,7 @@ if init_from == 'scratch':
     # init a new model from scratch
     print("Initializing a new model from scratch")
     # determine the vocab size we'll use for from-scratch training
-    if meta_vocab_size is None:
-        print("defaulting to vocab_size of GPT-2 to 50304 (50257 rounded up for efficiency)")
-    model_args['vocab_size'] = meta_vocab_size if meta_vocab_size is not None else 50304
+    model_args['vocab_size'] = vocab_size
     gptconf = GPTConfig(**model_args)
     model = GPT(gptconf)
 elif init_from == 'resume':
