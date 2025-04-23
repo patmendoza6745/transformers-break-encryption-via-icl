@@ -1,5 +1,16 @@
-#! /bin/bash
+#!/bin/bash
 
-CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
-
-torchrun --standalone --nproc_per_node=8 train.py config/train_gpt2.py --wandb_log=False
+# lr-1e-3
+CUDA_VISIBLE_DEVICES=0
+nohup python train.py  \
+    config/train_gpt2.py \
+    --wandb_run_name='lr-1e-3' \
+    --learning_rate=1e-3 \
+    --batch_size=256 \
+    --gradient_accumulation_steps=1 \
+    --max_iters=1000 \
+    --lr_decay_iters=1000 \
+    --eval_interval=100 \
+    --eval_iters=50 \
+    --log_interval=1 \
+    --weight_decay=1e-1 > logs/lr-1e-3.log 2>&1 &

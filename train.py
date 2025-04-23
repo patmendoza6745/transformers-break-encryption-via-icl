@@ -43,7 +43,7 @@ eval_only = False # if True, script exits right after the first eval
 always_save_checkpoint = True # if True, always save a checkpoint after each eval
 init_from = 'scratch' # 'scratch' or 'resume' or 'gpt2*'
 # wandb logging
-wandb_log = True # disabled by default
+wandb_log = False # disabled by default
 wandb_project = 'owt'
 wandb_run_name = 'gpt2' # 'run' + str(time.time())
 # data
@@ -133,7 +133,7 @@ with open(os.path.join(data_dir, 'meta.pkl'), 'rb') as f:
     meta = pickle.load(f)
 stoi, itos = meta['stoi'], meta['itos']
 vocab_size = meta['vocab_size'] 
-print(f"Using vocab size of {vocab_size} (a-z + separators)")
+print(f"Using vocab size of {vocab_size} (a-z + separators)", flush=True)
 
 # ---------------- helper: random mono‑alphabetic key --------
 alpha_ids = np.array([stoi[c] for c in ALPHABET], dtype=np.uint8)
@@ -204,7 +204,7 @@ elif init_from == 'resume':
     def get_latest_ckpt(directory):
         max_token_count = -1
         ckpt_file = None
-        pattern = re.compile(r'.*?(\d+(\.\d+)?)B_ckpt\.pt$')
+        pattern = re.compile(r'.*?(\d+(\.\d+)?)M_ckpt\.pt$')
 
         for filename in os.listdir(directory):
             match = pattern.search(filename)
@@ -266,7 +266,7 @@ checkpoint = None # free up memory
 
 # compile the model
 if compile:
-    print("compiling the model... (takes a ~minute)")
+    print("compiling the model... (takes a ~minute)", flush=True)
     unoptimized_model = model
     model = torch.compile(model) # requires PyTorch 2.0
 
@@ -316,7 +316,6 @@ local_iter_num = 0 # number of iterations in the lifetime of this process
 raw_model = model.module if ddp else model # unwrap DDP container if needed
 running_mfu = -1.0
 while True:
-
     curr_mem = torch.cuda.memory_allocated() / 2e30
     peak_mem = torch.cuda.max_memory_allocated() / 2e30
 
@@ -330,7 +329,7 @@ while True:
     # evaluate the loss on train/val sets and write checkpoints
     if iter_num % eval_interval == 0 and master_process:
         losses = estimate_loss()
-        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}")
+        print(f"step {iter_num}: train loss {losses['train']:.4f}, val loss {losses['val']:.4f}", flush=True)
         if wandb_log:
             wandb.log({
                 "tokens": total_tokens,
@@ -357,9 +356,9 @@ while True:
             'config': config,
             'total_tokens': total_tokens
         }
-        token_count = int(total_tokens // 1e9)
+        token_count = int(total_tokens // 1e6)
         print(f"saving checkpoint to {out_dir}")
-        torch.save(checkpoint, os.path.join(out_dir, f'{wandb_run_name}_{token_count}B_ckpt.pt'))
+        torch.save(checkpoint, os.path.join(out_dir, f'{wandb_run_name}_{token_count}M_ckpt.pt'))
 
     # forward backward update, with optional gradient accumulation to simulate larger batch size
     # and using the GradScaler if data type is float16
@@ -398,7 +397,7 @@ while True:
         if local_iter_num >= 5: # let the training loop settle a bit
             mfu = raw_model.estimate_mfu(batch_size * gradient_accumulation_steps, dt)
             running_mfu = mfu if running_mfu == -1.0 else 0.9*running_mfu + 0.1*mfu
-        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%")
+        print(f"iter {iter_num}: loss {lossf:.4f}, time {dt*1000:.2f}ms, mfu {running_mfu*100:.2f}%", flush=True)
         if wandb_log:
             wandb.log({
                 "tokens": total_tokens,
@@ -423,9 +422,9 @@ while True:
             'config': config,
             'total_tokens': total_tokens
         }
-        token_count = int(total_tokens // 1e9)
+        token_count = int(total_tokens // 1e6)
         print(f"saving final checkpoint to {out_dir}")
-        torch.save(checkpoint, os.path.join(out_dir, f"{out_dir}", f'final_{wandb_run_name}_{token_count}B_ckpt.pt'))
+        torch.save(checkpoint, os.path.join(out_dir, f'final_{wandb_run_name}_{token_count}M_ckpt.pt'))
         break
 
 if ddp:
