@@ -52,7 +52,7 @@ gradient_accumulation_steps = 5 * 8 # used to simulate larger batch sizes
 batch_size = 12 # if gradient_accumulation_steps > 1, this is the micro-batch size
 block_size = 2048
 # model
-n_layer = 8
+n_layer = 12
 n_head = 8
 n_embd = 256
 dropout = 0.0 # for pretraining 0 is good, for finetuning try 0.1+
@@ -152,8 +152,8 @@ def get_batch(split):
     prompt_sz = 2 * k_pairs                       # 2048 tokens
     assert prompt_sz == block_size, "block_size must be 2*k_pairs"
 
-    X = torch.full((batch_size, block_size), stoi['|'],  dtype=torch.long)
-    Y = torch.full((batch_size, block_size), -1,          dtype=torch.long)
+    X = torch.full((batch_size, block_size - 1), stoi['|'],  dtype=torch.long)
+    Y = torch.full((batch_size, block_size - 1), -1,          dtype=torch.long)
 
     for b in range(batch_size):
         # ----- 1. grab k plaintext letters from corpus -------------------
@@ -168,10 +168,11 @@ def get_batch(split):
         for i, p in enumerate(plain):
             c = enc[p]
             if i < known_k:                                 # give answer
-                buf.extend([c, p]);      tgt.extend([-1, p])
+                buf.extend([c, p])
+                tgt.extend([p, -1])
             else:                                           # query pair
-                buf.extend([c, stoi['?']])
-                tgt.extend([-1, p])
+                buf.extend([c])
+                tgt.extend([p])
 
         X[b] = torch.from_numpy(np.asarray(buf,  np.uint8))
         Y[b] = torch.from_numpy(np.asarray(tgt, np.int64))
@@ -292,17 +293,18 @@ def estimate_loss():
 
 # learning rate decay scheduler (cosine with warmup)
 def get_lr(it):
-    # 1) linear warmup for warmup_iters steps
-    if it < warmup_iters:
-        return learning_rate * (it + 1) / (warmup_iters + 1)
-    # 2) if it > lr_decay_iters, return min learning rate
-    if it > lr_decay_iters:
-        return min_lr
-    # 3) in between, use cosine decay down to min learning rate
-    decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
-    assert 0 <= decay_ratio <= 1
-    coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
-    return min_lr + coeff * (learning_rate - min_lr)
+    # # 1) linear warmup for warmup_iters steps
+    # if it < warmup_iters:
+    #     return learning_rate * (it + 1) / (warmup_iters + 1)
+    # # 2) if it > lr_decay_iters, return min learning rate
+    # if it > lr_decay_iters:
+    #     return min_lr
+    # # 3) in between, use cosine decay down to min learning rate
+    # decay_ratio = (it - warmup_iters) / (lr_decay_iters - warmup_iters)
+    # assert 0 <= decay_ratio <= 1
+    # coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio)) # coeff ranges 0..1
+    # return min_lr + coeff * (learning_rate - min_lr)
+    return learning_rate
 
 # logging
 if wandb_log and master_process:
