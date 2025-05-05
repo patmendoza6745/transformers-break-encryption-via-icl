@@ -9,7 +9,7 @@ block_size: 2048
 gradient_accumulation_steps: 1
 weight_decay: 1e-1
 learning_rate: 1e-3
-grad_clip = 1.0 # clip gradients at this value, or disable if == 0.0
+grad_clip: 1.0 # clip gradients at this value, or disable if == 0.0
 
 decay_lr: False # if True, warm up LR linearly for warmup_iters, then decay down to min lr for lr_decay_iters
 warmup_iters: 2000
