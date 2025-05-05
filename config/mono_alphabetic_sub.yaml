@@ -26,7 +26,7 @@ eval_only: False # if True, script exits right after the first eval
 dataset: 'openwebtext'
 
 # ddp settings (if applicable)
-backend = 'nccl' # 'nccl', 'gloo', etc.
+backend: 'nccl' # 'nccl', 'gloo', etc.
 
 # system
 compile: True # use PyTorch 2.0 to compile the model to be faster
