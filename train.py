@@ -8,6 +8,7 @@ import wandb
 import numpy as np
 import pickle
 import time
+import math
 import re
 
 from schemes import *
@@ -54,19 +55,14 @@ def get_batch(split, config, data_dir, device_type, device, stoi, alpha_ids):
     Y = torch.full((batch_size, block_size - 1), -1,          dtype=torch.long)
 
     for b in range(batch_size):
+        # ----- 1. grab k plaintext letters from corpus -------------------
+        start = np.random.randint(0, len(mmap) - k_pairs - 1)
+        plain = mmap[start:start + k_pairs].copy()          # np.uint8, shape (k_pairs,)
         
         if scheme_type == 'mono-alphabetic-sub':
-            # ----- 1. grab k plaintext letters from corpus -------------------
-            start = np.random.randint(0, len(mmap) - k_pairs - 1)
-            plain = mmap[start:start + k_pairs].copy()          # np.uint8, shape (k_pairs,)
-
             # ----- 2. fresh random key for this sample -----------------------
             scheme = MonoAlphabetic(alpha_ids=alpha_ids)
         elif scheme_type == 'vigenere':
-             # ----- 1. grab k plaintext letters from corpus -------------------
-            start = np.random.randint(0, len(mmap) - k_pairs - 1)
-            plain = mmap[start:start + k_pairs].copy()          # np.uint8, shape (k_pairs,)
-
             # ----- 2. fresh random key for this sample -----------------------
             # ----- randomly sample between 4 and 32 -----------------------
             key_length = np.random.randint(4, 32 + 1)
@@ -77,7 +73,7 @@ def get_batch(split, config, data_dir, device_type, device, stoi, alpha_ids):
         # ----- 3. build prompt ------------------------------------------
         buf, tgt = [], []
         for i, p in enumerate(plain):
-            c = scheme.enc(p)
+            c = scheme.encrypt(p)
             if i < known_k:                                 # give answer
                 buf.extend([c, p])
                 tgt.extend([p, -1])
@@ -134,22 +130,22 @@ def train(config):
 
     base_out_dir = config['base_out_dir']
 
-    batch_size = config['batch_size']
-    block_size = config['block_size']
-    gradient_accumulation_steps = config['gradient_accumulation_steps']
-    weight_decay = config['weight_decay']
-    learning_rate = config['learning_rate']
-    grad_clip = config['grad_clip']
+    batch_size = int(config['batch_size'])
+    block_size = int(config['block_size'])
+    gradient_accumulation_steps = int(config['gradient_accumulation_steps'])
+    weight_decay = float(config['weight_decay'])
+    learning_rate = float(config['learning_rate'])
+    grad_clip = float(config['grad_clip'])
 
-    warmup_iters = config['warmup_iters']
-    max_iters = config['max_iters']
-    lr_decay_iters = config['lr_decay_iters']
-    min_lr = config['min_lr']
+    warmup_iters = int(config['warmup_iters'])
+    max_iters = int(config['max_iters'])
+    lr_decay_iters = int(config['lr_decay_iters'])
+    min_lr = float(config['min_lr'])
     decay_lr = config['decay_lr']
 
-    eval_interval = config['eval_interval']
-    log_interval = config['log_interval']
-    save_interval = config['save_interval']
+    eval_interval = int(config['eval_interval'])
+    log_interval = int(config['log_interval'])
+    save_interval = int(config['save_interval'])
     eval_only = config['eval_only']
 
     dataset = config['dataset']
@@ -158,11 +154,15 @@ def train(config):
     compile = config['compile']
     scheme_type = config['scheme_type']
 
+    init_from = "scratch" # Assume that we always start from scratch
+
     device = 'cuda' if torch.cuda.is_available() else 'cpu' # examples: 'cpu', 'cuda', 'cuda:0', 'cuda:1' etc., or try 'mps' on macbooks
     dtype = 'bfloat16' if torch.cuda.is_available() and torch.cuda.is_bf16_supported() else 'float16' # 'float32', 'bfloat16', or 'float16', the latter will auto implement a GradScaler
 
-    config_str = ', '.join(f"{k}={v}" for k, v in config.items())
-    print(f"\n==== Final Config ====\n{config_str}\n=======================\n")
+    print("\n==== Final Config ====")
+    for k, v in config.items():
+        print(f"{k:<20}: {v}")
+    print("=======================\n")
 
     if wandb_log:
         wandb.init(project=wandb_project, name=wandb_run_name, config=config)
